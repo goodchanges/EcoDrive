@@ -14,6 +14,18 @@ import {
 
 const API_URL = "http://localhost:8000";
 
+const ROUTES = [
+  "City Center → Airport",
+  "Airport → City Center",
+  "City Center → Railway Station",
+  "Railway Station → City Center",
+  "Home → Office",
+  "Office → Home",
+  "Home → College",
+  "College → Home",
+  "Custom Route",
+];
+
 function App() {
   // --------------------------------------------------
   // Authentication state
@@ -43,8 +55,11 @@ function App() {
   const [trips, setTrips] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [result, setResult] = useState(null);
+  const [ecoTips, setEcoTips] = useState([]);
+  const [evComparison, setEvComparison] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [route, setRoute] = useState("");
 
   // --------------------------------------------------
   // Check Supabase authentication
@@ -131,6 +146,101 @@ function App() {
     }
 
     return streak;
+  };
+
+  // --------------------------------------------------
+  // Generate personalized eco-driving tips
+  // --------------------------------------------------
+
+  const generateEcoTips = (tripData, score) => {
+    const tips = [];
+
+    const efficiency =
+      tripData.distance / tripData.fuel;
+
+    // Fuel efficiency
+    if (efficiency < 10) {
+      tips.push(
+        "Your fuel efficiency is low. Try smoother acceleration and avoid unnecessary idling."
+      );
+    } else if (efficiency < 15) {
+      tips.push(
+        "Your fuel efficiency has room for improvement. Try maintaining a steady speed and accelerating gradually."
+      );
+    }
+
+    // Speed
+    if (tripData.average_speed > 80) {
+      tips.push(
+        "Try maintaining a more moderate and steady speed to improve fuel efficiency."
+      );
+    }
+
+    // Idle time
+    if (tripData.idle_time > 10) {
+      tips.push(
+        "You spent a lot of time idling. Switch off the engine during longer stops when practical."
+      );
+    }
+
+    // Harsh braking
+    if (tripData.harsh_braking > 0) {
+      tips.push(
+        `You had ${tripData.harsh_braking} harsh braking event${
+          tripData.harsh_braking > 1 ? "s" : ""
+        }. Keep more following distance to reduce sudden braking.`
+      );
+    }
+
+    // Harsh acceleration
+    if (tripData.harsh_acceleration > 0) {
+      tips.push(
+        `You had ${tripData.harsh_acceleration} harsh acceleration event${
+          tripData.harsh_acceleration > 1 ? "s" : ""
+        }. Accelerate more gradually to improve efficiency.`
+      );
+    }
+
+    // High score
+    if (score >= 90) {
+      tips.push(
+        "Excellent driving! Keep maintaining smooth acceleration, steady speed, and low idle time."
+      );
+    } else if (score >= 80) {
+      tips.push(
+        "Good job! Focus on the areas above to push your Eco Score even higher."
+      );
+    }
+
+    // Fallback
+    if (tips.length === 0) {
+      tips.push(
+        "Great trip! Your driving metrics look efficient. Keep up the good work."
+      );
+    }
+
+    return tips.slice(0, 4);
+  };
+
+  // --------------------------------------------------
+  // Calculate EV vs ICE comparison
+  // --------------------------------------------------
+
+  const calculateEVComparison = (
+    distance,
+    iceFuel,
+    iceCo2
+  ) => {
+    // Simple prototype assumption:
+    // EV consumes approximately 15 kWh per 100 km.
+    const evEnergy = distance * 0.15;
+
+    return {
+      iceFuel: Number(iceFuel.toFixed(2)),
+      iceCo2: Number(iceCo2.toFixed(2)),
+      evEnergy: Number(evEnergy.toFixed(2)),
+      evTailpipeCo2: 0,
+    };
   };
 
   // --------------------------------------------------
@@ -302,6 +412,8 @@ function App() {
 
     setError("");
     setResult(null);
+    setEcoTips([]);
+    setEvComparison(null);
     setLoading(true);
 
     try {
@@ -312,6 +424,7 @@ function App() {
       }
 
       const tripData = {
+        route: route,
         distance: Number(formData.distance),
         fuel: Number(formData.fuel),
         average_speed: Number(
@@ -349,6 +462,7 @@ function App() {
         .from("trips")
         .insert({
           user_id: user.id,
+          route: tripData.route,
           distance: tripData.distance,
           fuel: tripData.fuel,
           average_speed:
@@ -381,6 +495,18 @@ function App() {
         co2: metrics.co2,
       });
 
+      setEcoTips(
+        generateEcoTips(tripData, metrics.score)
+      );
+
+      setEvComparison(
+        calculateEVComparison(
+          tripData.distance,
+          tripData.fuel,
+          metrics.co2
+        )
+      );
+
       // ----------------------------------------------
       // 4. Clear form
       // ----------------------------------------------
@@ -393,6 +519,7 @@ function App() {
         harsh_braking: "",
         harsh_acceleration: "",
       });
+      setRoute("");
 
       // ----------------------------------------------
       // 5. Refresh dashboard + leaderboard
@@ -428,8 +555,81 @@ function App() {
   };
 
   // --------------------------------------------------
+  // Weekly eco report
+  // --------------------------------------------------
+
+  const getWeeklyReport = (tripsData) => {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(now.getDate() - 7);
+
+    const weeklyTrips = tripsData.filter((trip) => {
+      const tripDate = new Date(trip.created_at);
+      return tripDate >= sevenDaysAgo && tripDate <= now;
+    });
+
+    if (weeklyTrips.length === 0) {
+      return {
+        totalTrips: 0,
+        averageScore: 0,
+        totalCo2: 0,
+        averageEfficiency: 0,
+        bestScore: 0,
+        message:
+          "No trips recorded in the last 7 days. Add a trip to start your weekly report.",
+      };
+    }
+
+    const averageScore =
+      weeklyTrips.reduce(
+        (sum, trip) => sum + Number(trip.eco_score),
+        0
+      ) / weeklyTrips.length;
+
+    const totalCo2 = weeklyTrips.reduce(
+      (sum, trip) => sum + Number(trip.co2),
+      0
+    );
+
+    const averageEfficiency =
+      weeklyTrips.reduce(
+        (sum, trip) => sum + Number(trip.efficiency),
+        0
+      ) / weeklyTrips.length;
+
+    const bestScore = Math.max(
+      ...weeklyTrips.map((trip) => Number(trip.eco_score))
+    );
+
+    let message =
+      "Keep building your eco-driving habits this week.";
+
+    if (averageScore >= 90) {
+      message =
+        "Excellent week! Your driving performance was highly eco-friendly.";
+    } else if (averageScore >= 80) {
+      message =
+        "Great week! Keep focusing on smooth acceleration and steady speeds.";
+    } else if (averageScore < 60) {
+      message =
+        "There is room to improve. Focus on reducing idling, harsh braking, and harsh acceleration.";
+    }
+
+    return {
+      totalTrips: weeklyTrips.length,
+      averageScore: Number(averageScore.toFixed(2)),
+      totalCo2: Number(totalCo2.toFixed(2)),
+      averageEfficiency: Number(averageEfficiency.toFixed(2)),
+      bestScore,
+      message,
+    };
+  };
+
+  // --------------------------------------------------
   // Chart data
   // --------------------------------------------------
+
+  const weeklyReport = getWeeklyReport(trips);
 
   const chartData = trips
     .slice(0, 7)
@@ -629,6 +829,78 @@ function App() {
 
         </section>
 
+        {/* Weekly Eco Report */}
+        <section className="bg-white rounded-2xl shadow-sm p-6 mb-8">
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold">
+              📅 Weekly Eco Report
+            </h2>
+
+            <p className="text-gray-500 text-sm mt-1">
+              Your driving performance over the last 7 days.
+            </p>
+          </div>
+
+          {weeklyReport.totalTrips > 0 ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-gray-500 text-sm">
+                    Trips This Week
+                  </p>
+                  <p className="text-3xl font-bold mt-2">
+                    {weeklyReport.totalTrips}
+                  </p>
+                </div>
+
+                <div className="bg-green-50 rounded-xl p-5">
+                  <p className="text-gray-500 text-sm">
+                    Average Eco Score
+                  </p>
+                  <p className="text-3xl font-bold text-green-600 mt-2">
+                    {weeklyReport.averageScore}
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-gray-500 text-sm">
+                    CO₂ This Week
+                  </p>
+                  <p className="text-3xl font-bold mt-2">
+                    {weeklyReport.totalCo2} kg
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-gray-500 text-sm">
+                    Avg. Efficiency
+                  </p>
+                  <p className="text-3xl font-bold mt-2">
+                    {weeklyReport.averageEfficiency} km/L
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 bg-green-50 rounded-xl p-5">
+                <p className="text-gray-700">
+                  🏆 Best Eco Score this week:{" "}
+                  <span className="font-semibold">
+                    {weeklyReport.bestScore}
+                  </span>
+                </p>
+
+                <p className="text-gray-700 mt-2">
+                  🌱 {weeklyReport.message}
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="bg-gray-50 rounded-xl p-5 text-gray-600">
+              {weeklyReport.message}
+            </div>
+          )}
+        </section>
+
         {/* Recent Trips */}
         <section className="bg-white rounded-2xl shadow-sm p-6 mb-8">
 
@@ -645,6 +917,10 @@ function App() {
                   <tr className="border-b text-gray-500 text-sm">
                     <th className="py-3">
                       Date
+                    </th>
+
+                    <th className="py-3">
+                      Route
                     </th>
 
                     <th className="py-3">
@@ -676,6 +952,10 @@ function App() {
                         {new Date(
                           trip.created_at
                         ).toLocaleDateString()}
+                      </td>
+
+                      <td className="py-4">
+                        {trip.route || "Not specified"}
                       </td>
 
                       <td className="py-4">
@@ -860,6 +1140,28 @@ function App() {
             className="grid grid-cols-1 md:grid-cols-2 gap-5"
           >
 
+            {/* Route */}
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium mb-2">
+                Route
+              </label>
+
+              <select
+                value={route}
+                onChange={(e) => setRoute(e.target.value)}
+                required
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 bg-white"
+              >
+                <option value="">Select a route</option>
+
+                {ROUTES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Distance */}
             <div>
               <label className="block text-sm font-medium mb-2">
@@ -1033,6 +1335,85 @@ function App() {
                   {result.co2} kg
                 </p>
               </div>
+
+              {ecoTips.length > 0 && (
+                <div className="md:col-span-3 mt-4 bg-green-50 rounded-xl p-6">
+                  <h3 className="text-xl font-semibold text-green-800 mb-4">
+                    💡 Personalized Eco Tips
+                  </h3>
+
+                  <div className="space-y-3">
+                    {ecoTips.map((tip, index) => (
+                      <div
+                        key={index}
+                        className="flex items-start gap-3 bg-white rounded-lg p-4"
+                      >
+                        <span className="text-lg">🌱</span>
+
+                        <p className="text-gray-700">
+                          {tip}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {evComparison && (
+                <div className="md:col-span-3 mt-4 bg-blue-50 rounded-xl p-6">
+                  <h3 className="text-xl font-semibold text-blue-800 mb-4">
+                    ⚡ EV vs ICE Comparison
+                  </h3>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-blue-200">
+                          <th className="py-3">Metric</th>
+                          <th className="py-3">ICE 🚗</th>
+                          <th className="py-3">EV ⚡</th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        <tr className="border-b border-blue-100">
+                          <td className="py-3 font-medium">
+                            Energy / Fuel
+                          </td>
+
+                          <td className="py-3">
+                            {evComparison.iceFuel} L
+                          </td>
+
+                          <td className="py-3">
+                            {evComparison.evEnergy} kWh
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td className="py-3 font-medium">
+                            CO₂
+                          </td>
+
+                          <td className="py-3">
+                            {evComparison.iceCo2} kg
+                          </td>
+
+                          <td className="py-3 text-green-600 font-semibold">
+                            0 kg tailpipe
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="text-sm text-gray-600 mt-4">
+                    EV energy use is estimated at 15 kWh per 100 km.
+                    This prototype comparison shows tailpipe CO₂ only and
+                    does not include electricity-generation emissions.
+                  </p>
+                </div>
+              )}
 
             </div>
           )}

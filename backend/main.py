@@ -48,6 +48,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS trips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route TEXT,
             distance REAL NOT NULL,
             fuel REAL NOT NULL,
             average_speed REAL NOT NULL,
@@ -62,6 +63,16 @@ def init_db():
         """
     )
 
+    # Add route column to an existing SQLite database created
+    # before route support was added.
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(trips)").fetchall()
+    }
+
+    if "route" not in columns:
+        conn.execute("ALTER TABLE trips ADD COLUMN route TEXT")
+
     conn.commit()
     conn.close()
 
@@ -74,12 +85,13 @@ init_db()
 # --------------------------------------------------
 
 class Trip(BaseModel):
-    distance: float = Field(gt=0)
-    fuel: float = Field(gt=0)
-    average_speed: float = Field(ge=0)
-    idle_time: float = Field(ge=0)
-    harsh_braking: int = Field(ge=0)
-    harsh_acceleration: int = Field(ge=0)
+    route: str = Field(..., min_length=1)
+    distance: float = Field(..., gt=0)
+    fuel: float = Field(..., gt=0)
+    average_speed: float = Field(..., ge=0)
+    idle_time: float = Field(..., ge=0)
+    harsh_braking: int = Field(..., ge=0)
+    harsh_acceleration: int = Field(..., ge=0)
 
 
 # --------------------------------------------------
@@ -141,7 +153,7 @@ def read_root():
 
 
 # --------------------------------------------------
-# Add a trip
+# Add a trip to legacy SQLite database
 # --------------------------------------------------
 
 @app.post("/api/trips")
@@ -155,6 +167,7 @@ def add_trip(trip: Trip):
     cursor = conn.execute(
         """
         INSERT INTO trips (
+            route,
             distance,
             fuel,
             average_speed,
@@ -166,9 +179,10 @@ def add_trip(trip: Trip):
             co2,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            trip.route,
             trip.distance,
             trip.fuel,
             trip.average_speed,
@@ -188,6 +202,7 @@ def add_trip(trip: Trip):
 
     return {
         "id": trip_id,
+        "route": trip.route,
         "distance": trip.distance,
         "fuel": trip.fuel,
         "efficiency": metrics["efficiency"],
@@ -206,6 +221,7 @@ def calculate_trip(trip: Trip):
     metrics = calculate_trip_metrics(trip)
 
     return {
+        "route": trip.route,
         "efficiency": metrics["efficiency"],
         "co2": metrics["co2"],
         "score": metrics["score"],
@@ -224,6 +240,7 @@ def get_trips():
         """
         SELECT
             id,
+            route,
             distance,
             fuel,
             average_speed,
